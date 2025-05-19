@@ -1,56 +1,49 @@
+import os
 import streamlit as st
-from openai import OpenAI
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import RetrievalQA
+from langchain.document_loaders import PyPDFLoader
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+import tempfile
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# Set your OpenAI API Key securely
+OPENAI_API_KEY = "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"
+os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+def load_pdf(file_path):
+    loader = PyPDFLoader(file_path)
+    return loader.load_and_split()
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+def create_vectorstore(documents):
+    embeddings = OpenAIEmbeddings()
+    return FAISS.from_documents(documents, embeddings)
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+def create_qa_chain(vectorstore):
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+    llm = ChatOpenAI(model_name="gpt-3.5-turbo")
+    return RetrievalQA.from_chain_type(llm=llm, retriever=retriever, chain_type="stuff")
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# Streamlit UI
+st.set_page_config(page_title="Document Chatbot with RAG", layout="wide")
+st.title("📄💬 Chat with Your Document (LangChain + RAG)")
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+uploaded_file = st.file_uploader("Upload a PDF document", type=["pdf"])
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+if uploaded_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        tmp_path = tmp_file.name
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+    st.success("📄 Document uploaded and processing...")
+    docs = load_pdf(tmp_path)
+    vectorstore = create_vectorstore(docs)
+    qa_chain = create_qa_chain(vectorstore)
+    st.success("✅ Chatbot is ready!")
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    # Chat UI
+    user_question = st.text_input("Ask a question based on the document:")
+    if user_question:
+        with st.spinner("Thinking..."):
+            response = qa_chain.run(user_question)
+        st.markdown(f"**Answer:** {response}")
